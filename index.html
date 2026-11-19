@@ -17,8 +17,10 @@ body{margin:0;padding:0;height:100vh;width:100vw;overflow:hidden;background:blac
 .grid-container{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);display:grid;grid-template-columns:repeat(10,80px);grid-template-rows:repeat(6,80px);gap:10px;z-index:10;max-width:95vw;max-height:90vh;overflow:auto;padding:6px}
 .box{width:80px;height:80px;display:flex;flex-direction:column;justify-content:center;align-items:center;background:transparent;border:3px solid transparent;border-radius:15px;cursor:pointer;font-size:10px;font-weight:900;color:white;animation:neonBlink 1s infinite alternate;box-shadow:inset 0 0 0 3px var(--neon-color,magenta),0 0 10px var(--neon-color),0 0 20px var(--neon-color);text-align:center;position:relative;user-select:none;line-height:1.2;padding:2px;box-sizing:border-box}
 .box.has-link{border-color:lime;background:rgba(0,255,0,0.12);box-shadow:inset 0 0 0 3px lime,0 0 15px lime,0 0 25px lime;color:lime;animation:none}
+.box.restoring{border-color:yellow;background:rgba(255,255,0,0.16);box-shadow:inset 0 0 0 3px yellow,0 0 15px yellow,0 0 25px yellow;color:yellow;animation:septicShock 0.15s infinite}
 .box-num{font-size:14px;font-weight:900;color:cyan;text-shadow:0 0 8px cyan;margin-bottom:2px}
 .box.has-link .box-num{color:lime;text-shadow:0 0 8px lime}
+.box.restoring .box-num{color:yellow;text-shadow:0 0 8px yellow}
 @keyframes neonBlink{0%{text-shadow:0 0 10px cyan}100%{text-shadow:0 0 20px magenta}}
 .box:nth-child(odd){--neon-color:magenta}.box:nth-child(even){--neon-color:cyan}
 
@@ -170,13 +172,24 @@ const DEFAULT_LINKS_1_TO_51 = {
   50: "https://ragesband1.github.io/October-28-2026-Gayuma-Folkloric-Anthropology-Profile-Bio/"
 };
 
-// 2. AUTO-SAVE STORAGE & STATE (MERGED WITH 1-51 LINKS)
+// 2. AUTO-SAVE STORAGE & STATE (AUTO-RESTORE ON REFRESH / OFFLINE / DELETE)
 const STORAGE_KEY = 'septic_shock_ghost_links_v1';
+const RESTORE_TIMERS_KEY = 'septic_shock_restore_timers_v1';
 let savedLinks = Object.assign({}, DEFAULT_LINKS_1_TO_51);
+let restoreTimers = {};
+let activeIntervals = {};
+
 try {
   const fromStorage = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
   savedLinks = Object.assign({}, DEFAULT_LINKS_1_TO_51, fromStorage);
+  // Kapag nirefresh ang page at may kulang/na-delete na link, matic ibalik sa dati
+  for (let i = 0; i < 51; i++) {
+    if (!savedLinks[i] || !savedLinks[i].trim()) {
+      savedLinks[i] = DEFAULT_LINKS_1_TO_51[i];
+    }
+  }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLinks));
+  localStorage.removeItem(RESTORE_TIMERS_KEY);
 } catch (e) {
   savedLinks = Object.assign({}, DEFAULT_LINKS_1_TO_51);
 }
@@ -198,16 +211,57 @@ for(let i=0;i<TOTAL_BOXES;i++){
   boxElements.push(b);
 }
 
-function updateBoxAppearance(el, idx){
+function updateBoxAppearance(el, idx, countdownSec = null){
   const boxNumber = idx + 1;
   const val = (savedLinks[idx] || '').trim();
-  if(val){
+  el.classList.remove('has-link', 'restoring');
+
+  if(countdownSec !== null && countdownSec > 0){
+    el.classList.add('restoring');
+    el.innerHTML = `<span class="box-num">${boxNumber}</span><span style="font-size:9px;color:yellow;">BABALIK IN</span><span style="font-size:13px;color:yellow;">${countdownSec}s...</span>`;
+  } else if(val){
     el.classList.add('has-link');
     el.innerHTML = `<span class="box-num">${boxNumber}</span><span>Ghost Auto Save</span><span style="font-size:8px;color:lime;">[GREEN • LINK]</span>`;
   } else {
-    el.classList.remove('has-link');
     el.innerHTML = `<span class="box-num">${boxNumber}</span><span>Ghost Auto Save</span>`;
   }
+}
+
+// 3-SECOND AUTO-RESTORE COUNTDOWN SA LOOB MISMO NG FLEXBOX
+function startAutoRestoreCountdown(idx){
+  if(activeIntervals[idx]){
+    clearInterval(activeIntervals[idx]);
+  }
+  let secondsLeft = 3;
+  updateBoxAppearance(boxElements[idx], idx, secondsLeft);
+
+  activeIntervals[idx] = setInterval(()=>{
+    secondsLeft--;
+    if(secondsLeft > 0){
+      updateBoxAppearance(boxElements[idx], idx, secondsLeft);
+      if(activeBoxIndex === idx && myModal.style.display === 'block'){
+        saveNotice.innerText = `⏳ Babalik ang link in ${secondsLeft}s...`;
+        saveNotice.style.color = 'yellow';
+      }
+    } else {
+      clearInterval(activeIntervals[idx]);
+      delete activeIntervals[idx];
+      // IBALIK SA DATING ORIGINAL LINK
+      const restoredUrl = DEFAULT_LINKS_1_TO_51[idx];
+      savedLinks[idx] = restoredUrl;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLinks));
+      } catch(e){}
+      updateBoxAppearance(boxElements[idx], idx);
+
+      if(activeBoxIndex === idx && myModal.style.display === 'block'){
+        ghostInput.value = restoredUrl;
+        syncDialogButtonState(restoredUrl);
+        saveNotice.style.color = 'lime';
+        saveNotice.innerText = '✓ Bumalik na sa dati ang link!';
+      }
+    }
+  }, 1000);
 }
 
 // 4. GHOSTING DIALOG LOGIC
@@ -223,7 +277,8 @@ function openGhostDialog(idx){
   document.getElementById('boxTitle').innerText = `FLEXBOX ${idx + 1} (GHOSTING DIALOG)`;
   const currentVal = (savedLinks[idx] || '').trim();
   ghostInput.value = currentVal;
-  saveNotice.innerText = currentVal ? '✓ Naka-save na sa memory' : '';
+  saveNotice.style.color = 'lime';
+  saveNotice.innerText = currentVal ? '✓ Naka-save na sa memory' : '⏳ Babalik ang link sa loob ng 3s...';
   syncDialogButtonState(currentVal);
   myModal.style.display = 'block';
 }
@@ -243,30 +298,42 @@ function syncDialogButtonState(val){
   }
 }
 
-// MATIC AUTO-SAVE HABANG NAGTA-TYPE O NAGPE-PASTE
+// MATIC AUTO-SAVE HABANG NAGTA-TYPE O NAGPE-PASTE (AT 3s RESTORE KAPAG BINURA)
 ghostInput.addEventListener('input', function(){
   if(activeBoxIndex === null) return;
   const val = this.value;
   if(val.trim().length > 0){
+    if(activeIntervals[activeBoxIndex]){
+      clearInterval(activeIntervals[activeBoxIndex]);
+      delete activeIntervals[activeBoxIndex];
+    }
     savedLinks[activeBoxIndex] = val.trim();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLinks));
+    updateBoxAppearance(boxElements[activeBoxIndex], activeBoxIndex);
+    syncDialogButtonState(val);
+    saveNotice.style.color = 'lime';
+    saveNotice.innerText = '✓ Matic Saved!';
   } else {
     delete savedLinks[activeBoxIndex];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLinks));
+    syncDialogButtonState('');
+    saveNotice.style.color = 'yellow';
+    saveNotice.innerText = '⏳ Babalik ang link in 3s...';
+    startAutoRestoreCountdown(activeBoxIndex);
   }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLinks));
-  updateBoxAppearance(boxElements[activeBoxIndex], activeBoxIndex);
-  syncDialogButtonState(val);
-  saveNotice.innerText = '✓ Matic Saved!';
 });
 
-// CLEAR BUTTON
+// CLEAR BUTTON -> 3 SECONDS COUNTDOWN SA LOOB NG FLEXBOX TAPOS BABALIK SA DATI
 document.getElementById('clearLinkBtn').addEventListener('click', function(){
   if(activeBoxIndex === null) return;
+  const targetIdx = activeBoxIndex;
   ghostInput.value = '';
-  delete savedLinks[activeBoxIndex];
+  delete savedLinks[targetIdx];
   localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLinks));
-  updateBoxAppearance(boxElements[activeBoxIndex], activeBoxIndex);
   syncDialogButtonState('');
-  saveNotice.innerText = '✓ Tinanggal ang link';
+  saveNotice.style.color = 'yellow';
+  saveNotice.innerText = '⏳ Na-delete! Babalik in 3s...';
+  startAutoRestoreCountdown(targetIdx);
 });
 
 function closeAll(){
@@ -301,11 +368,26 @@ window.onclick=(e)=>{
   if(e.target===browseModal) closeAll();
 };
 
-// 5. OFFLINE & NO-HISTORY RESET + STAY / ANTI-CLOSE PROTECTION
+// 5. OFFLINE & NO-HISTORY RESET + STAY / ANTI-CLOSE PROTECTION (KEEP ALL 1-51 LINKS)
 const netIndicator = document.getElementById('netIndicator');
+
+function restoreMissingLinksNow(){
+  for(let i = 0; i < TOTAL_BOXES; i++){
+    if(!savedLinks[i] || !savedLinks[i].trim()){
+      if(!activeIntervals[i]){
+        savedLinks[i] = DEFAULT_LINKS_1_TO_51[i];
+        updateBoxAppearance(boxElements[i], i);
+      }
+    }
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedLinks));
+  } catch(e){}
+}
 
 function resetToCleanStateNoHistory(){
   closeAll();
+  restoreMissingLinksNow();
   if(window.history && window.history.replaceState){
     window.history.replaceState(null, document.title, window.location.pathname);
   }
@@ -313,9 +395,10 @@ function resetToCleanStateNoHistory(){
 
 function updateNetworkStatus(){
   if(!navigator.onLine){
-    netIndicator.innerText = 'OFFLINE • NO HISTORY MODE';
+    netIndicator.innerText = 'OFFLINE • AUTO-RESTORE LINKS';
     netIndicator.style.color = '#ff0055';
     netIndicator.style.borderColor = '#ff0055';
+    restoreMissingLinksNow();
   } else {
     netIndicator.innerText = 'ONLINE • STAY ACTIVE';
     netIndicator.style.color = 'lime';
@@ -346,6 +429,7 @@ window.addEventListener('popstate', function () {
 });
 
 window.addEventListener('beforeunload', function (e) {
+  restoreMissingLinksNow();
   e.preventDefault();
   e.returnValue = '';
 });
